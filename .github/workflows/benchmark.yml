@@ -1,0 +1,70 @@
+name: Platform Benchmark
+
+on:
+  schedule:
+    # Run daily at 2:00 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual triggering
+    inputs:
+      notes:
+        description: 'Optional notes for this benchmark run'
+        required: false
+        type: string
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm install pg
+          npm install @types/node --save-dev
+
+      - name: Trigger builds on all platforms
+        id: trigger
+        env:
+          GITHUB_TOKEN: ${{ secrets.BENCHMARK_REPO_PAT }}
+          PANTHEON_API_TOKEN: ${{ secrets.PANTHEON_API_TOKEN }}
+          VERCEL_API_TOKEN: ${{ secrets.VERCEL_API_TOKEN }}
+          NETLIFY_API_TOKEN: ${{ secrets.NETLIFY_API_TOKEN }}
+        run: |
+          node scripts/trigger-builds.js
+        continue-on-error: false
+
+      - name: Poll platform APIs and record metrics
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PANTHEON_API_TOKEN: ${{ secrets.PANTHEON_API_TOKEN }}
+          VERCEL_API_TOKEN: ${{ secrets.VERCEL_API_TOKEN }}
+          NETLIFY_API_TOKEN: ${{ secrets.NETLIFY_API_TOKEN }}
+          RUN_NOTES: ${{ github.event.inputs.notes }}
+        run: |
+          node scripts/poll-and-record.js
+        continue-on-error: false
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Benchmark run failed. Check logs for details."
+          # TODO: Add Slack/email notification here
+
+      - name: Upload logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-logs-${{ github.run_number }}
+          path: |
+            benchmark-*.log
+            *.json
+          retention-days: 30
