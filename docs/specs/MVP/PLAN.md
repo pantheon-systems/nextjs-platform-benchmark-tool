@@ -106,9 +106,9 @@ Each receives identical copies of `/benchmark-app` via GitHub Actions.
    - Record exact trigger timestamp for each
 
 3. **Poll Platform APIs**
-   - Poll Pantheon API for build status
-   - Poll Vercel API for build status
-   - Poll Netlify API for build status
+   - Poll **GCP Cloud Build API** for Pantheon build status (internal access)
+   - Poll **Vercel API** for build status
+   - Poll **Netlify API** for build status
    - Run polls in parallel
    - Wait for all builds to complete (or timeout after 60 minutes)
 
@@ -122,10 +122,11 @@ Each receives identical copies of `/benchmark-app` via GitHub Actions.
    - Slack/email notification
 
 **Secrets Required:**
-- `PANTHEON_API_TOKEN` - API access for Pantheon
+- `GCP_PROJECT_ID` - GCP project where Pantheon builds run (internal)
+- `GCP_SERVICE_ACCOUNT_JSON` - Service account with Cloud Build Viewer role (internal)
 - `VERCEL_API_TOKEN` - API access for Vercel
 - `NETLIFY_API_TOKEN` - API access for Netlify
-- `CLOUD_SQL_CONNECTION_STRING` - PostgreSQL connection
+- `DATABASE_URL` - PostgreSQL connection string
 - `BENCHMARK_REPO_PAT` - GitHub Personal Access Token to push to platform repos
 
 ### 3. Database Schema
@@ -245,16 +246,19 @@ CREATE TABLE platform_builds (
 
 ### Phase 1: MVP (Core Build Benchmarking)
 - [x] Planning (this document)
-- [ ] Set up monorepo structure
-- [ ] Create benchmark Next.js app (medium-sized)
-- [ ] Set up Cloud SQL database + migrations
-- [ ] Create GitHub Actions workflow
-  - [ ] Trigger builds on all platforms
-  - [ ] Poll platform APIs
+- [x] Set up monorepo structure
+- [x] Create benchmark Next.js app (medium-sized)
+- [x] Set up Cloud SQL database + migrations
+- [x] Create GitHub Actions workflow skeleton
+  - [x] Trigger builds on all platforms (git push)
+  - [ ] Implement GCP Cloud Build polling for Pantheon (needs internal credentials)
+  - [ ] Implement Vercel API polling
+  - [ ] Implement Netlify API polling
   - [ ] Record to database
-- [ ] Build dashboard (basic charts)
+- [x] Build dashboard (basic charts)
 - [ ] Implement Google SSO authentication
 - [ ] Deploy dashboard to Pantheon
+- [ ] Obtain GCP service account (internal DevOps)
 - [ ] Run first successful benchmark
 
 ### Phase 2: Enhanced Monitoring
@@ -274,6 +278,44 @@ CREATE TABLE platform_builds (
 - [ ] Heavy app variant
 - [ ] Feature-specific benchmarks (ISR, Edge, etc.)
 
+## Platform-Specific Implementation Details
+
+### Pantheon (GCP Cloud Build Integration)
+
+**Architecture:**
+- Pantheon builds run on **Google Cloud Build** in Pantheon-owned GCP project
+- Deploys to **Google Cloud Run**
+- Internal Pantheon access allows querying Cloud Build API directly
+
+**Implementation Approach:**
+- Use GCP Cloud Build API (not direct Pantheon API)
+- Service account with `roles/cloudbuild.builds.viewer` permission
+- Find builds by commit SHA or timestamp window
+- Poll Cloud Build status for completion
+
+**Build Identification:**
+1. Push benchmark app to `pantheon-benchmark` repo
+2. Record commit SHA and trigger timestamp
+3. Query Cloud Build API to find build matching commit SHA
+4. Poll build status until completion
+5. Extract timing from Cloud Build metadata
+
+**See:** `docs/PANTHEON_INTEGRATION.md` for detailed setup
+
+### Vercel
+
+**Implementation:**
+- Vercel Deployments API: https://vercel.com/docs/rest-api/endpoints/deployments
+- Poll deployment status by ID
+- Standard REST API integration
+
+### Netlify
+
+**Implementation:**
+- Netlify API: https://docs.netlify.com/api/get-started/
+- Poll deploy status by ID
+- Standard REST API integration
+
 ## Open Questions / Decisions Needed
 
 1. **Exact time for daily benchmark run** - When is least likely to hit platform maintenance windows?
@@ -282,6 +324,7 @@ CREATE TABLE platform_builds (
 4. **Platform API rate limits** - Do we need to throttle polling?
 5. **Timeout handling** - What constitutes a "failed" benchmark? (60 min timeout suggested)
 6. **Data retention policy** - Keep all historical data or aggregate/archive old runs?
+7. **GCP Project ID** - Confirm specific project where benchmark builds will run (internal DevOps team)
 
 ## Success Criteria
 
@@ -295,7 +338,9 @@ CREATE TABLE platform_builds (
 
 | Risk | Mitigation |
 |------|------------|
-| Platform API changes break polling | Version API calls; add error handling; monitor for 4xx/5xx |
+| GCP Cloud Build API changes | Use stable v1 API; add error handling; monitor for breaking changes |
+| Build identification failures (Pantheon) | Multi-strategy search: commit SHA, timestamp window, fallback to manual |
+| Platform API changes (Vercel/Netlify) | Version API calls; add error handling; monitor for 4xx/5xx |
 | GitHub Actions reliability | Add retry logic; manual trigger fallback |
 | Database connection issues | Connection pooling; retry logic; Cloud SQL uptime monitoring |
 | Build minute limits (Vercel/Netlify) | Daily frequency keeps usage low; monitor usage |
